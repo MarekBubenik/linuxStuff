@@ -15,6 +15,7 @@
 #
 #
 
+OLDKEYFILE="VM_123"
 PKGS=(dracut tpm2-tools)
 CRYPTOPART=$(blkid -t TYPE=crypto_LUKS | cut -d ":" -f 1)       # determine LUKS partition
 
@@ -33,7 +34,7 @@ passGenFunc () {
         # done
         # printf %s "${array[@]::20}" > /root/old_keyfile.key
         mkdir -p /tmp/keys
-        printf "VM_123" | install -m 0600 /dev/stdin /tmp/keys/old_keyfile.key
+        printf "$OLDKEYFILE" | install -m 0600 /dev/stdin /tmp/keys/old_keyfile.key
         dd bs=512 count=4 if=/dev/random iflag=fullblock | install -m 0600 /dev/stdin /tmp/keys/new_keyfile.key
 }
 
