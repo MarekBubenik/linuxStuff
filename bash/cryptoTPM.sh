@@ -34,7 +34,7 @@ passGenFunc () {
         # done
         # printf %s "${array[@]::20}" > /root/old_keyfile.key
         mkdir -p /tmp/keys
-        printf "$OLDKEYFILE" | install -m 0600 /dev/stdin /tmp/keys/old_keyfile.key
+        printf %s "$OLDKEYFILE" | install -m 0600 /dev/stdin /tmp/keys/old_keyfile.key
         dd bs=512 count=4 if=/dev/random iflag=fullblock | install -m 0600 /dev/stdin /tmp/keys/new_keyfile.key
 }
 
