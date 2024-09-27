@@ -1,9 +1,10 @@
 #!/bin/bash
+# Author: Marek Bubeník
+# Date: 27.09.2024
+# About part 1: Rotate keyfiles for LUKS partition, generate and  enroll keys for TPM, generate new image and update grub
+# About part 2: Generate private and public keys, enroll public key to MOK list, sign kernel/GRUB/kernel modules with keys
 #
 #
-#
-
-
 # Pre-requisites we need for to sign kernel modules
 # SBPKGS="shim-signed sbsigntool build-essentials dkms linux-headers-$(uname -r) efivar"
 # shim-signed                   Secure Boot chain-loading bootloader (Microsoft-signed binary)
@@ -16,47 +17,55 @@
 #
 
 OLDKEYFILE="VM_123"
+TMPDIR="/tmp/keys"
 PKGS=(dracut tpm2-tools)
 CRYPTOPART=$(blkid -t TYPE=crypto_LUKS | cut -d ":" -f 1)       # determine LUKS partition
 
-# install packages from $PKGS
-pkgsFunc () {
-        apt -y install "${PKGS[@]}"
+##########
+# Part 1 #
+##########
+
+pkgsInstall () {
+    # install packages
+    apt -y -qq install "${PKGS[@]}"
 }
 
-# random string generator
-# number 20 determine how long the string is going to be
-passGenFunc () {
-        # array=()
-        # for i in {a..z} {A..Z} {0..9};
-        #         do
-        #         array[$RANDOM]=$i
-        # done
-        # printf %s "${array[@]::20}" > /root/old_keyfile.key
-        mkdir -p /tmp/keys
-        printf %s "$OLDKEYFILE" | install -m 0600 /dev/stdin /tmp/keys/old_keyfile.key
-        dd bs=512 count=4 if=/dev/random iflag=fullblock | install -m 0600 /dev/stdin /tmp/keys/new_keyfile.key
-}
-
-# rotate passphrase on LUKS partition
-passRotateFunc () {
-    if [ "$CRYPTOPART" ];then
-        #cryptsetup luksChangeKey "$CRYPTOPART" --key-file ./oldpass.txt --new-keyfile ./newpass.txt
-        cryptsetup luksAddKey "$CRYPTOPART" --new-keyfile /tmp/keys/new_keyfile.key --key-file /tmp/keys/old_keyfile.key
-        cryptsetup luksKillSlot "$CRYPTOPART" 0 --key-file /tmp/keys/new_keyfile.key
-        echo "################################################"
-        echo "Passphrase successfully changed! New keyslot = 1"
-        echo "################################################"
+keyfileGen () {
+    # keyfile generator
+    if [[ "$CRYPTOPART" ]];then
+        mkdir -p $TMPDIR
+        printf %s "$OLDKEYFILE" | install -m 0600 /dev/stdin $TMPDIR/old_keyfile.key
+        dd bs=512 count=4 if=/dev/random iflag=fullblock | install -m 0600 /dev/stdin $TMPDIR/new_keyfile.key
+        echo "###################"
+        echo "Keyfiles generated!"
+        echo "###################"
     fi
 }
 
-# generate keys for TPM
-# new passphrase is passed
-# deletes temp keyfiles
-# https://wiki.archlinux.org/title/Trusted_Platform_Module#Accessing_PCR_registers
-passTpmFunc () {
-    systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-pcrs=7+11 --unlock-key-file=/tmp/keys/new_keyfile.key "$CRYPTOPART"
-    rm -rf /tmp/keys
+keyRotate () {
+    # rotate passphrase with the new keyfile
+    if [[ -d "$TMPDIR" ]];then
+        cryptsetup luksChangeKey "$CRYPTOPART" --key-file $TMPDIR/old_keyfile.key $TMPDIR/new_keyfile.key
+        echo "##############################"
+        echo "Keyfiles successfully changed!"
+        echo "##############################"
+    fi
+}
+
+keyTpmEnroll () {
+    # generate keys for TPM
+    # deletes tmp keyfiles
+    # https://wiki.archlinux.org/title/Trusted_Platform_Module#Accessing_PCR_registers
+    for key in "$TMPDIR"/*.key
+    do
+        if [ -f "$key" ];then
+            systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-pcrs=7+11 --unlock-key-file=$TMPDIR/new_keyfile.key "$CRYPTOPART"
+            rm -rf /tmp/keys
+            echo "######################################"
+            echo "Keyfile successfully enrolled for TPM!"
+            echo "######################################"
+        fi
+    done
 }
 
 imageReg () {
@@ -74,14 +83,56 @@ imageReg () {
     update-grub
 }
 
-pkgsFunc
-passGenFunc
-passRotateFunc
-passTpmFunc
-imageReg
+##########
+# Part 2 #
+##########
+
+genPrivKeys () {
+    # Generate the public and private key pair
+    echo ""
+}
+
+keyMokEnroll () {
+    # Enrolling public key on target system by adding the public key to the MOK list
+    echo ""
+}
+
+signFunc () {
+    # Signing a kernel with the private key
+    echo ""
+
+    # Signing a GRUB build with the private key
+    echo ""
+
+    # Signing kernel modules with the private key
+    echo ""
+
+}
+
+executeFunc () {
+    pkgsInstall
+    keyfileGen
+    keyRotate
+    keyTpmEnroll
+    imageReg
+    genPrivKeys
+    keyMokEnroll
+    signFunc
+}
+
+
+# Check if script is run as root
+if [[ "${EUID}" -ne 0 ]]; then
+    echo "This script must be run as root.  Try:
+        sudo $0
+        "
+    exit 1
+fi
+
+executeFunc
+
 
 # TODO!
-# figure out keyslot, why there is 0 and not just 1
 # play with TPM PCRs, try other combinations
 # https://wiki.debian.org/SecureBoot
 #
