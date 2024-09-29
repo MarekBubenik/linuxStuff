@@ -13,12 +13,17 @@
 # dkms                          Program/framework that enables generating Linux kernel modules whose sources generally reside outside the kernel source tree
 # linux-headers-$(uname -r)     Package providing the Linux kernel headers (The headers act as an interface between internal kernel components and also between userspace and the kernel)
 # efivar                        Tools to manage UEFI variables
-#
+
+# efikeygen     -   pesign              -   Generates public and private X.509 key pair
+# openssl       -   openssl             -   Exports the unencrypted private key
+# sign-file     -   build-essential     -   Executable file used to sign a kernel module with the private key
+# mokutil       -   mokutil             -   Optional utility used to manually enroll the public key
+# keyctl        -   keyutils            -   Optional utility used to display public keys in the system keyring 
 #
 
 OLDKEYFILE="VM_123"
 TMPDIR="/tmp/keys"
-PKGS=(dracut tpm2-tools)
+PKGS=(dracut tpm2-tools pesign openssl build-essential mokutil keyutils)
 CRYPTOPART=$(blkid -t TYPE=crypto_LUKS | cut -d ":" -f 1)       # determine LUKS partition
 
 ##########
@@ -87,6 +92,8 @@ imageReg () {
 # Part 2 #
 ##########
 
+# https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/8/html/managing_monitoring_and_updating_the_kernel/signing-a-kernel-and-modules-for-secure-boot_managing-monitoring-and-updating-the-kernel#signing-kernel-modules-with-the-private-key_signing-a-kernel-and-modules-for-secure-boot
+#
 genPrivKeys () {
     # Generate the public and private key pair
     echo ""
