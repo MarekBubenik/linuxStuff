@@ -17,7 +17,7 @@
 OLDKEYFILE="VM_123"
 TMPDIR="/tmp/keys"
 MOKDIR="/usr/lib/mok"
-PKGS=(shim-signed sbsigntool build-essential dkms linux-headers-"$(uname -r)" efivar tss2 tpm2-tools clevis clevis-tpm2 clevis-luks initramfs-tools clevis-initramfs)
+PKGS=(tss2 tpm2-tools clevis clevis-tpm2 clevis-luks initramfs-tools clevis-initramfs)      #shim-signed sbsigntool build-essential dkms linux-headers-"$(uname -r)" efivar 
 CRYPTOPART=$(blkid -t TYPE=crypto_LUKS | cut -d ":" -f 1)       # determine LUKS partition
 
 ##########
@@ -28,17 +28,26 @@ pkgsInstall () {
     # install packages
     apt -y -qq install "${PKGS[@]}"
     mkdir -p $TMPDIR
-    mkdir -p $MOKDIR
+    #mkdir -p $MOKDIR
 }
 
 keyGen () {
     # keyfile generator
     if [[ -d "$TMPDIR" ]];then
+        array=()
+        for i in {a..z} {A..Z} {0..9}; 
+            do
+            array[$RANDOM]=$i
+        done
+        printf %s ${array[@]::15} | install -m 0600 /dev/stdin $TMPDIR/new_keyfile.key
         printf %s "$OLDKEYFILE" | install -m 0600 /dev/stdin $TMPDIR/old_keyfile.key
-        dd bs=512 count=4 if=/dev/random iflag=fullblock | install -m 0600 /dev/stdin $TMPDIR/new_keyfile.key
+        #dd bs=512 count=4 if=/dev/random iflag=fullblock | install -m 0600 /dev/stdin $TMPDIR/new_keyfile.key
         echo "###################"
         echo "Keyfiles generated!"
         echo "###################"
+    else
+        echo "Temporary directory not created - cannot generate temporary keyfiles! Exiting..."
+        exit 1    
     fi
 }
 
@@ -49,6 +58,9 @@ keyRotate () {
         echo "#################"
         echo "Keyfiles changed!"
         echo "#################"
+    else
+        echo "LUKS partition not found - no LUKS keys has been changed! Exiting..."
+        exit 1   
     fi
 }
 
@@ -58,12 +70,15 @@ keyEnroll () {
     # https://wiki.archlinux.org/title/Trusted_Platform_Module#Accessing_PCR_registers
     if [[ "$CRYPTOPART" ]];then
         LUKSKEY=$(<$TMPDIR/new_keyfile.key)
-        clevis luks bind -d "$CRYPTOPART" tpm2 '{"pcr_bank":"sha256","pcr_ids":"0,7"}' <<< "$LUKSKEY"
+        clevis luks bind -d "$CRYPTOPART" tpm2 '{"pcr_bank":"sha256","pcr_ids":"7"}' <<< "$LUKSKEY"
         update-initramfs -u -k all
         #rm -rf /tmp/keys
         echo "#########################"
         echo "Keyfile enrolled for TPM!"
         echo "#########################"
+    else
+        echo "LUKS partition not found - no LUKS keys has been passed to TPM! Exiting..."
+        exit 1     
     fi
 }
 
