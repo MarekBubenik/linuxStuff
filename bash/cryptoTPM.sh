@@ -24,9 +24,39 @@ CRYPTOPART=$(blkid -t TYPE=crypto_LUKS | cut -d ":" -f 1)       # determine LUKS
 # Part 1 #
 ##########
 
+preReq () {
+    # Secure boot check
+    SBENB=$(mokutil --sb)
+    if [[ $SBENB =~ "enabled" ]];then
+        echo "Secure boot       -   [ detected ]"
+    else
+        echo "Secure boot not detected, enable Secure boot in UEFI settings! Exiting..."
+        exit 1
+    fi
+
+    # LUKS partition check
+    LUKSENB=$(blkid -t TYPE=crypto_LUKS)
+    if [[ $LUKSENB ]];then
+        echo "LUKS partition    -   [ detected ]"
+    else
+        echo "LUKS partition not detected, this script works only with LUKS encrypted partitions! Exiting..."
+        exit 1
+    fi
+
+    # TPM 2.0 module check
+    if [[ -c /dev/tpmrm0 ]];then
+        echo "TPM 2.0 module    -   [ detected ]"
+    else
+        echo "TPM 2.0 module not detected, this script works only with TPM 2.0 enabled devices! Exiting..."
+        exit 1
+    fi
+    sleep 4
+}
+
 pkgsInstall () {
     # install packages
-    apt -y -qq install "${PKGS[@]}"
+    # https://askubuntu.com/questions/258219/how-do-i-make-apt-get-install-less-noisy
+    apt-get install -qq -o=Dpkg::Use-Pty=0 "${PKGS[@]}"
     mkdir -p $TMPDIR
     #mkdir -p $MOKDIR
 }
@@ -39,14 +69,14 @@ keyGen () {
             do
             array[$RANDOM]=$i
         done
-        printf %s ${array[@]::15} | install -m 0600 /dev/stdin $TMPDIR/new_keyfile.key
+        printf %s ${array[@]::20} | install -m 0600 /dev/stdin $TMPDIR/new_keyfile.key
         printf %s "$OLDKEYFILE" | install -m 0600 /dev/stdin $TMPDIR/old_keyfile.key
         #dd bs=512 count=4 if=/dev/random iflag=fullblock | install -m 0600 /dev/stdin $TMPDIR/new_keyfile.key
         echo "###################"
         echo "Keyfiles generated!"
         echo "###################"
     else
-        echo "Temporary directory not created - cannot generate temporary keyfiles! Exiting..."
+        echo "Temporary /keys directory not found - cannot generate temporary keyfiles! Exiting..."
         exit 1    
     fi
 }
@@ -72,10 +102,10 @@ keyEnroll () {
         LUKSKEY=$(<$TMPDIR/new_keyfile.key)
         clevis luks bind -d "$CRYPTOPART" tpm2 '{"pcr_bank":"sha256","pcr_ids":"7"}' <<< "$LUKSKEY"
         update-initramfs -u -k all
-        #rm -rf /tmp/keys
-        echo "#########################"
-        echo "Keyfile enrolled for TPM!"
-        echo "#########################"
+        rm -rf /tmp/keys
+        echo "##################################################"
+        echo "Keyfile enrolled for TPM! Removing old keyfiles..."
+        echo "##################################################"
     else
         echo "LUKS partition not found - no LUKS keys has been passed to TPM! Exiting..."
         exit 1     
@@ -250,6 +280,7 @@ keyMokEnroll () {
 # }
 
 executeFunc () {
+    preReq
     pkgsInstall
     keyGen
     keyRotate
