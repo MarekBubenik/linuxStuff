@@ -17,7 +17,7 @@
 OLDKEYFILE="VM_123"
 TMPDIR="/tmp/keys"
 MOKDIR="/usr/lib/mok"
-PKGS=(tss2 tpm2-tools clevis clevis-tpm2 clevis-luks initramfs-tools clevis-initramfs)      #shim-signed sbsigntool build-essential dkms linux-headers-"$(uname -r)" efivar 
+PKGS=(shim-signed sbsigntool build-essential dkms linux-headers-"$(uname -r)" efivar tss2 tpm2-tools clevis clevis-tpm2 clevis-luks initramfs-tools clevis-initramfs shim-signed sbsigntool build-essential dkms linux-headers-"$(uname -r)" efivar)
 CRYPTOPART=$(blkid -t TYPE=crypto_LUKS | cut -d ":" -f 1)       # determine LUKS partition
 
 ##########
@@ -58,7 +58,7 @@ pkgsInstall () {
     # https://askubuntu.com/questions/258219/how-do-i-make-apt-get-install-less-noisy
     apt-get install -qq -o=Dpkg::Use-Pty=0 "${PKGS[@]}"
     mkdir -p $TMPDIR
-    #mkdir -p $MOKDIR
+    mkdir -p $MOKDIR
 }
 
 keyGen () {
@@ -106,7 +106,7 @@ keyEnroll () {
         # So if it does not work you may still just enter your decryption passphrase as usual.
         clevis luks bind -d "$CRYPTOPART" tpm2 '{"pcr_bank":"sha256","pcr_ids":"7"}' <<< "$LUKSKEY"
         update-initramfs -u -k all
-        #rm -rf /tmp/keys
+        rm -rf /tmp/keys
         echo "##################################################"
         echo "Keyfile enrolled for TPM! Removing old keyfiles..."
         echo "##################################################"
@@ -178,6 +178,46 @@ keyEnroll () {
 #   Kernel    -   Signed by MOK key
 #
 #
+
+shimFunc () {
+    cd /usr/lib/shim/ || exit
+    cp shimx64.efi.signed /boot/efi/EFI/debian/BOOTX64.EFI
+    cp mmx64.efi.signed /boot/efi/EFI/debian/mmx64.efi  
+    efibootmgr --unicode --disk /dev/sda --part 1 --create --label debian-signed --loader /EFI/debian/BOOTx64.efi
+}
+
+genPrivKeys () {
+    # Generate the public and private key pair
+    openssl req -newkey rsa:4096 -nodes -keyout /usr/lib/mok/"$(uname -n)".key -new -x509 -sha256 -days 3650 -subj "/CN=$(uname -n)-mok" -out /usr/lib/mok/"$(uname -n)".crt
+    openssl x509 -outform DER -in /usr/lib/mok/"$(uname -n)".crt -out /usr/lib/mok/"$(uname -n)".cer
+}
+
+keyMokEnroll () {
+    # Enrolling public key on target system by adding the public key to the MOK list
+    # Optional: Check enrolled keys: mokutil --list-enrolled
+    mokutil --generate-hash=$OLDKEYFILE > $TMPDIR/hashfile
+    mokutil --import /usr/lib/mok/"$(uname -n)".cer --hash-file $TMPDIR/hashfile
+    rm -rf $TMPDIR/hashfile
+}
+
+
+# signKernelAndModules () {
+#     # Sign kernel with MOK key
+#     sbsign --key /usr/lib/mok/$(uname -n).key --cert /usr/lib/mok/$(uname -n).crt --output /boot/vmlinuz-$(uname -r) /boot/vmlinuz-$(uname -r)
+#     # Sign kernel modules with MOK key
+#     cd /usr/lib/modules/$(uname -r) || exit
+#     find . -name *.ko -exec /usr/lib/modules/$(uname -r)/source/scripts/sign-file sha256 /usr/lib/mok/$(uname -n).key /usr/lib/mok/$(uname -n).cer {} \;
+#     # Rebuild initramfs
+#     update-initramfs -u -k all
+# }
+
+# TODO: incorporate into /etc/kernel/postinst.d/initramfs-tools ????
+
+
+# ------------
+# IGNORE SECTION
+# ------------
+
 # Restrictions
 # ============
 # - GRUB
@@ -190,48 +230,14 @@ keyEnroll () {
 #       - Hibernation is disabled
 #
 
-
-# shimFunc () {
-#     cd /usr/lib/shim/ || exit
-#     cp shimx64.efi.signed /boot/efi/EFI/debian/BOOTX64.EFI
-#     cp mmx64.efi.signed /boot/efi/EFI/debian/mmx64.efi  
-#     efibootmgr --unicode --disk /dev/sda --part 1 --create --label debian-signed --loader /EFI/debian/BOOTx64.efi
-# }
-
-# genPrivKeys () {
-#     # Generate the public and private key pair
-#     openssl req -newkey rsa:4096 -nodes -keyout /usr/lib/mok/"$(uname -n)".key -new -x509 -sha256 -days 3650 -subj "/CN=$(uname -n)-mok" -out /usr/lib/mok/"$(uname -n)".crt
-#     openssl x509 -outform DER -in /usr/lib/mok/"$(uname -n)".crt -out /usr/lib/mok/"$(uname -n)".cer
-# }
-
-# keyMokEnroll () {
-#     # Enrolling public key on target system by adding the public key to the MOK list
-#     # Optional: Check enrolled keys: mokutil --list-enrolled
-#     mokutil --generate-hash=$OLDKEYFILE > $TMPDIR/hashfile
-#     mokutil --import /usr/lib/mok/"$(uname -n)".cer --hash-file $TMPDIR/hashfile
-#     rm -rf $TMPDIR/hashfile
-# }
-
-# signKernelAndModules () {
-#     # Sign kernel with MOK key
-#     sbsign --key /usr/lib/mok/$(uname -n).key --cert /usr/lib/mok/$(uname -n).crt --output /boot/vmlinuz-$(uname -r) /boot/vmlinuz-$(uname -r)
-#     # Sign kernel modules with MOK key
-#     cd /usr/lib/modules/$(uname -r) || exit
-#     find . -name *.ko -exec /usr/lib/modules/$(uname -r)/source/scripts/sign-file sha256 /usr/lib/mok/$(uname -n).key /usr/lib/mok/$(uname -n).cer {} \;
-#     # Rebuild initramfs
-#     update-initramfs -u
-# }
-
-# TODO: incorporate into /etc/kernel/postinst.d/initramfs-tools ????
-
-
-# ------------
-# IGNORE SECTION
-# ------------
-
 # # SBAT
 # #echo "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\ngrub,3,Free Software Foundation,grub,2.06,https://www.gnu.org/software/grub/\ngrub.ubuntu,1,Ubuntu,grub2,2.06-2ubuntu14.1,https://www.ubuntu.com/" > /usr/share/grub/sbat.csv
-# echo "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\ngrub,1,Free Software Foundation,grub,2.04,https://www.gnu.org/software/grub/\grub.debian,1,Debian,grub2,2.04-12,https://packages.debian.org/source/sid/grub2" > /usr/share/grub/sbat.csv
+
+genSbat () {
+    echo "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\ngrub,1,Free Software Foundation,grub,2.04,https://www.gnu.org/software/grub/\grub.debian,1,Debian,grub2,2.04-12,https://packages.debian.org/source/sid/grub2" > /usr/share/grub/sbat.csv
+}
+
+
 
 # gpg --gen-key
 # gpg --export xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx | sudo tee /usr/lib/mok/$(uname -n).asc > /dev/null
@@ -285,12 +291,12 @@ keyEnroll () {
 executeFunc () {
     preReq
     pkgsInstall
+    shimFunc
+    genPrivKeys
+    keyMokEnroll
     keyGen
     keyRotate
     keyEnroll
-    #shimFunc
-    #genPrivKeys
-    #keyMokEnroll
     #signKernelAndModules
 }
 
