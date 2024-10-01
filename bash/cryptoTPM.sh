@@ -222,6 +222,12 @@ keyEnroll () {
 #     update-initramfs -u
 # }
 
+# TODO: incorporate into /etc/kernel/postinst.d/initramfs-tools ????
+
+
+# ------------
+# IGNORE SECTION
+# ------------
 
 # # SBAT
 # #echo "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\ngrub,3,Free Software Foundation,grub,2.06,https://www.gnu.org/software/grub/\ngrub.ubuntu,1,Ubuntu,grub2,2.06-2ubuntu14.1,https://www.ubuntu.com/" > /usr/share/grub/sbat.csv
@@ -272,6 +278,9 @@ keyEnroll () {
 # cp /root/grubx64.efi /boot/efi/EFI/debian/
 # sbsign --key /usr/lib/mok/$(uname -n).key --cert /usr/lib/mok/$(uname -n).crt --output /boot/efi/EFI/debian/grubx64.efi /boot/efi/EFI/debian/grubx64.efi
 
+# ------------
+# IGNORE SECTION
+# ------------
 
 executeFunc () {
     preReq
