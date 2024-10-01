@@ -17,7 +17,7 @@
 OLDKEYFILE="VM_123"
 TMPDIR="/tmp/keys"
 MOKDIR="/usr/lib/mok"
-PKGS=(shim-signed sbsigntool build-essential dkms linux-headers-"$(uname -r)" efivar tpm2-tools) #dracut
+PKGS=(shim-signed sbsigntool build-essential dkms linux-headers-"$(uname -r)" efivar tss2 tpm2-tools clevis clevis-tpm2 clevis-luks initramfs-tools clevis-initramfs)
 CRYPTOPART=$(blkid -t TYPE=crypto_LUKS | cut -d ":" -f 1)       # determine LUKS partition
 
 ##########
@@ -31,9 +31,9 @@ pkgsInstall () {
     mkdir -p $MOKDIR
 }
 
-keyfileGen () {
+keyGen () {
     # keyfile generator
-    if [[ "$CRYPTOPART" ]];then
+    if [[ -d "$TMPDIR" ]];then
         printf %s "$OLDKEYFILE" | install -m 0600 /dev/stdin $TMPDIR/old_keyfile.key
         dd bs=512 count=4 if=/dev/random iflag=fullblock | install -m 0600 /dev/stdin $TMPDIR/new_keyfile.key
         echo "###################"
@@ -44,7 +44,7 @@ keyfileGen () {
 
 keyRotate () {
     # rotate passphrase with the new keyfile
-    if [[ -d "$TMPDIR" ]];then
+    if [[ "$CRYPTOPART" ]];then
         cryptsetup luksChangeKey "$CRYPTOPART" --key-file $TMPDIR/old_keyfile.key $TMPDIR/new_keyfile.key
         echo "#################"
         echo "Keyfiles changed!"
@@ -52,12 +52,14 @@ keyRotate () {
     fi
 }
 
-keyTpmEnroll () {
-    # generate keys for TPM
+keyEnroll () {
+    # clevis pass keys for TPM
     # deletes tmp keyfiles
     # https://wiki.archlinux.org/title/Trusted_Platform_Module#Accessing_PCR_registers
-    if [[ -d "$TMPDIR" ]];then
-        systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-pcrs=7+11 --unlock-key-file=$TMPDIR/new_keyfile.key "$CRYPTOPART"
+    if [[ "$CRYPTOPART" ]];then
+        LUKSKEY=$(<$TMPDIR/new_keyfile.key)
+        clevis luks bind -d "$CRYPTOPART" tpm2 '{"pcr_bank":"sha256","pcr_ids":"0,7"}' <<< "$LUKSKEY"
+        update-initramfs -u -k all
         #rm -rf /tmp/keys
         echo "#########################"
         echo "Keyfile enrolled for TPM!"
@@ -65,20 +67,6 @@ keyTpmEnroll () {
     fi
 }
 
-imageReg () {
-    # rd.auto / enable auto assembly of special devices like cryptoLUKS, dmraid, mdraid or lvm
-    # rd.luks=1 / enable crypto LUKS detection
-    sed -i 's/GRUB_CMDLINE_LINUX=""/GRUB_CMDLINE_LINUX="rd.auto rd.luks=1"/g' /etc/default/grub
-
-    # systemd-cryptenroll puts the list of PCRs in the LUKS header, comment out for automatic decryption by TPM
-    sed -i 's/^/# /' /etc/crypttab
-
-    # adding modules before building a new initramfs image
-    echo "add_dracutmodules+=\" tpm2-tss crypt \"" >> /etc/dracut.conf
-
-    dracut -f
-    update-grub
-}
 
 ##########
 # Part 2 #
@@ -171,36 +159,36 @@ keyMokEnroll () {
     rm -rf $TMPDIR/hashfile
 }
 
-# Sign kernel with MOK key
-sbsign --key /usr/lib/mok/$(uname -n).key --cert /usr/lib/mok/$(uname -n).crt --output /boot/vmlinuz-$(uname -r) /boot/vmlinuz-$(uname -r)
-# Sign kernel modules with MOK key
-cd /usr/lib/modules/$(uname -r) || exit
-find . -name *.ko -exec /usr/lib/modules/$(uname -r)/source/scripts/sign-file sha256 /usr/lib/mok/$(uname -n).key /usr/lib/mok/$(uname -n).cer {} \;
-# Rebuild initramfs
-update-initramfs -u
+# # Sign kernel with MOK key
+# sbsign --key /usr/lib/mok/$(uname -n).key --cert /usr/lib/mok/$(uname -n).crt --output /boot/vmlinuz-$(uname -r) /boot/vmlinuz-$(uname -r)
+# # Sign kernel modules with MOK key
+# cd /usr/lib/modules/$(uname -r) || exit
+# find . -name *.ko -exec /usr/lib/modules/$(uname -r)/source/scripts/sign-file sha256 /usr/lib/mok/$(uname -n).key /usr/lib/mok/$(uname -n).cer {} \;
+# # Rebuild initramfs
+# update-initramfs -u
 
-# SBAT
-#echo "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\ngrub,3,Free Software Foundation,grub,2.06,https://www.gnu.org/software/grub/\ngrub.ubuntu,1,Ubuntu,grub2,2.06-2ubuntu14.1,https://www.ubuntu.com/" > /usr/share/grub/sbat.csv
-echo "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\ngrub,1,Free Software Foundation,grub,2.04,https://www.gnu.org/software/grub/\grub.debian,1,Debian,grub2,2.04-12,https://packages.debian.org/source/sid/grub2" > /usr/share/grub/sbat.csv
+# # SBAT
+# #echo "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\ngrub,3,Free Software Foundation,grub,2.06,https://www.gnu.org/software/grub/\ngrub.ubuntu,1,Ubuntu,grub2,2.06-2ubuntu14.1,https://www.ubuntu.com/" > /usr/share/grub/sbat.csv
+# echo "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\ngrub,1,Free Software Foundation,grub,2.04,https://www.gnu.org/software/grub/\grub.debian,1,Debian,grub2,2.04-12,https://packages.debian.org/source/sid/grub2" > /usr/share/grub/sbat.csv
 
-gpg --gen-key
-gpg --export xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx | sudo tee /usr/lib/mok/$(uname -n).asc > /dev/null
+# gpg --gen-key
+# gpg --export xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx | sudo tee /usr/lib/mok/$(uname -n).asc > /dev/null
 
-# Sign GRUB modules
-cd /usr/lib/grub/x86_64-efi || exit
-sudo find . -name "*.mod" -exec gpg --detach-sign {} \;
-sudo find . -name "*.lst" -exec gpg --detach-sign {} \;
-sudo find . -name "*.img" -exec gpg --detach-sign {} \;
-# Sign GRUB
-cd /boot/grub || exit
-sudo find . -type f -exec gpg --detach-sign {} \;
-# Sign kernel
-cd /boot/ || exit
-sudo find . -name "vmlinuz*" -exec gpg --detach-sign {} \;
-sudo find . -name "initrd*" -exec gpg --detach-sign {} \;
+# # Sign GRUB modules
+# cd /usr/lib/grub/x86_64-efi || exit
+# sudo find . -name "*.mod" -exec gpg --detach-sign {} \;
+# sudo find . -name "*.lst" -exec gpg --detach-sign {} \;
+# sudo find . -name "*.img" -exec gpg --detach-sign {} \;
+# # Sign GRUB
+# cd /boot/grub || exit
+# sudo find . -type f -exec gpg --detach-sign {} \;
+# # Sign kernel
+# cd /boot/ || exit
+# sudo find . -name "vmlinuz*" -exec gpg --detach-sign {} \;
+# sudo find . -name "initrd*" -exec gpg --detach-sign {} \;
 
 
-vim /boot/grub/grub-initial.cfg
+# vim /boot/grub/grub-initial.cfg
 # #Initial skeleton config to bootstrap grub
 # #Enforce checking signatures on all loaded files
 
@@ -217,16 +205,16 @@ vim /boot/grub/grub-initial.cfg
 
 # configfile /grub/grub.cfg
 
-GRUB_MODULES="acpi all_video boot btrfs cat chain configfile echo efifwsetup efinet ext2 fat font gettext gfxmenu gfxterm gfxterm_background gzio halt help hfsplus iso9660 jpeg keystatus loadenv loopback linux ls lsefi lsefimmap lsefisystab lssal memdisk minicmd normal ntfs part_apple part_msdos part_gpt password_pbkdf2 png probe reboot regexp search search_fs_uuid search_fs_file search_label sleep smbios squash4 test true video xfs zfs zfscrypt zfsinfo cpuid linuxefi play tpm cryptodisk gcry_arcfour gcry_blowfish gcry_camellia gcry_cast5 gcry_crc gcry_des gcry_dsa gcry_idea gcry_md4 gcry_md5 gcry_rfc2268 gcry_rijndael gcry_rmd160 gcry_rsa gcry_seed gcry_serpent gcry_sha1 gcry_sha256 gcry_sha512 gcry_tiger gcry_twofish gcry_whirlpool luks lvm efi_uga efi_gop crypto disk diskfilter pcidump setpci lspci"
-GRUB_DIR="/usr/lib/grub/x86_64-efi"
-GRUB_PUB_KEY="/usr/lib/mok/$(uname -n).asc"
-GRUB_SBAT="/usr/share/grub/sbat.csv"
-GRUB_OUTPUT="/root/grubx64.efi"
-GRUB_INIT_CONFIG="/boot/grub/grub-initial.cfg"
-grub-mkstandalone --directory "$GRUB_DIR" --format x86_64-efi --modules "$GRUB_MODULES" --pubkey "$GRUB_PUB_KEY" --sbat "$GRUB_SBAT" --output "$GRUB_OUTPUT" "boot/grub/grub.cfg=$GRUB_INIT_CONFIG"
+# GRUB_MODULES="acpi all_video boot btrfs cat chain configfile echo efifwsetup efinet ext2 fat font gettext gfxmenu gfxterm gfxterm_background gzio halt help hfsplus iso9660 jpeg keystatus loadenv loopback linux ls lsefi lsefimmap lsefisystab lssal memdisk minicmd normal ntfs part_apple part_msdos part_gpt password_pbkdf2 png probe reboot regexp search search_fs_uuid search_fs_file search_label sleep smbios squash4 test true video xfs zfs zfscrypt zfsinfo cpuid linuxefi play tpm cryptodisk gcry_arcfour gcry_blowfish gcry_camellia gcry_cast5 gcry_crc gcry_des gcry_dsa gcry_idea gcry_md4 gcry_md5 gcry_rfc2268 gcry_rijndael gcry_rmd160 gcry_rsa gcry_seed gcry_serpent gcry_sha1 gcry_sha256 gcry_sha512 gcry_tiger gcry_twofish gcry_whirlpool luks lvm efi_uga efi_gop crypto disk diskfilter pcidump setpci lspci"
+# GRUB_DIR="/usr/lib/grub/x86_64-efi"
+# GRUB_PUB_KEY="/usr/lib/mok/$(uname -n).asc"
+# GRUB_SBAT="/usr/share/grub/sbat.csv"
+# GRUB_OUTPUT="/root/grubx64.efi"
+# GRUB_INIT_CONFIG="/boot/grub/grub-initial.cfg"
+# grub-mkstandalone --directory "$GRUB_DIR" --format x86_64-efi --modules "$GRUB_MODULES" --pubkey "$GRUB_PUB_KEY" --sbat "$GRUB_SBAT" --output "$GRUB_OUTPUT" "boot/grub/grub.cfg=$GRUB_INIT_CONFIG"
 
-cp /root/grubx64.efi /boot/efi/EFI/debian/
-sbsign --key /usr/lib/mok/$(uname -n).key --cert /usr/lib/mok/$(uname -n).crt --output /boot/efi/EFI/debian/grubx64.efi /boot/efi/EFI/debian/grubx64.efi
+# cp /root/grubx64.efi /boot/efi/EFI/debian/
+# sbsign --key /usr/lib/mok/$(uname -n).key --cert /usr/lib/mok/$(uname -n).crt --output /boot/efi/EFI/debian/grubx64.efi /boot/efi/EFI/debian/grubx64.efi
 
 
 
@@ -248,16 +236,14 @@ sbsign --key /usr/lib/mok/$(uname -n).key --cert /usr/lib/mok/$(uname -n).crt --
 
 executeFunc () {
     pkgsInstall
-    #keyfileGen
-    #keyRotate
-    #keyTpmEnroll
-    #imageReg
-    shimFunc
-    genPrivKeys
-    keyMokEnroll
+    keyGen
+    keyRotate
+    keyEnroll
+    #shimFunc
+    #genPrivKeys
+    #keyMokEnroll
     #signFunc
 }
-
 
 # Check if script is run as root
 if [[ "${EUID}" -ne 0 ]]; then
@@ -268,9 +254,3 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 executeFunc
-
-
-# TODO!
-# play with TPM PCRs, try other combinations
-# https://wiki.debian.org/SecureBoot
-#
