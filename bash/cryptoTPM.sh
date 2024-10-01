@@ -2,7 +2,7 @@
 # Author: Marek Bubeník
 # Date: 27.09.2024
 # About part 1: Rotate keyfiles for LUKS partition, generate and enroll keys for TPM, generate new image and update grub
-# About part 2: Generate private and public keys, enroll public key to MOK list, sign kernel/GRUB/kernel modules with keys
+# About part 2: Generate private and public keys, enroll public key to MOK list, sign kernel/GRUB/kernel modules
 #
 #
 # Pre-requisites we need for to sign kernel modules
@@ -62,7 +62,7 @@ pkgsInstall () {
 }
 
 keyGen () {
-    # keyfile generator
+    # keyfile generator (20 length string)
     if [[ -d "$TMPDIR" ]];then
         array=()
         for i in {a..z} {A..Z} {0..9}; 
@@ -76,7 +76,7 @@ keyGen () {
         echo "Keyfiles generated!"
         echo "###################"
     else
-        echo "Temporary /keys directory not found - cannot generate temporary keyfiles! Exiting..."
+        echo "Temporary /tmp/keys directory not found - cannot generate temporary keyfiles! Exiting..."
         exit 1    
     fi
 }
@@ -98,17 +98,24 @@ keyEnroll () {
     # clevis pass keys for TPM
     # deletes tmp keyfiles
     # https://wiki.archlinux.org/title/Trusted_Platform_Module#Accessing_PCR_registers
+    # https://221b.uk/safe-automatic-decryption-luks-partition-tpm2#background
+    # https://www.reddit.com/r/linuxquestions/comments/106ntat/comment/j3hwfdc/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button
     if [[ "$CRYPTOPART" ]];then
         LUKSKEY=$(<$TMPDIR/new_keyfile.key)
+        # The process generate a new independent secret, tying your LUKS partition to the TPM2 as an alternative decryption method.
+        # So if it does not work you may still just enter your decryption passphrase as usual.
         clevis luks bind -d "$CRYPTOPART" tpm2 '{"pcr_bank":"sha256","pcr_ids":"7"}' <<< "$LUKSKEY"
         update-initramfs -u -k all
-        rm -rf /tmp/keys
+        #rm -rf /tmp/keys
         echo "##################################################"
         echo "Keyfile enrolled for TPM! Removing old keyfiles..."
         echo "##################################################"
+        # On every update of your system that makes changes to the kernel, grub2 or initramfs you’ll have to rebind the TPM2, if you opted to use PCR 9. 
+        # CRYPTOPART=$(blkid -t TYPE=crypto_LUKS | cut -d ":" -f 1)
+        # clevis luks regen -q -d "$CRYPTOPART" -s 1 tpm2
     else
         echo "LUKS partition not found - no LUKS keys has been passed to TPM! Exiting..."
-        exit 1     
+        exit 1
     fi
 }
 
@@ -182,35 +189,39 @@ keyEnroll () {
 #       - All kernel modules must be signed
 #       - Hibernation is disabled
 #
-#
-shimFunc () {
-    cd /usr/lib/shim/ || exit
-    cp shimx64.efi.signed /boot/efi/EFI/debian/BOOTX64.EFI
-    cp mmx64.efi.signed /boot/efi/EFI/debian/mmx64.efi  
-    efibootmgr --unicode --disk /dev/sda --part 1 --create --label debian-signed --loader /EFI/debian/BOOTx64.efi
-}
 
-genPrivKeys () {
-    # Generate the public and private key pair
-    openssl req -newkey rsa:4096 -nodes -keyout /usr/lib/mok/"$(uname -n)".key -new -x509 -sha256 -days 3650 -subj "/CN=$(uname -n)-mok" -out /usr/lib/mok/"$(uname -n)".crt
-    openssl x509 -outform DER -in /usr/lib/mok/"$(uname -n)".crt -out /usr/lib/mok/"$(uname -n)".cer
-}
 
-keyMokEnroll () {
-    # Enrolling public key on target system by adding the public key to the MOK list
-    # Optional: Check enrolled keys: mokutil --list-enrolled
-    mokutil --generate-hash=$OLDKEYFILE > $TMPDIR/hashfile
-    mokutil --import /usr/lib/mok/"$(uname -n)".cer --hash-file $TMPDIR/hashfile
-    rm -rf $TMPDIR/hashfile
-}
+# shimFunc () {
+#     cd /usr/lib/shim/ || exit
+#     cp shimx64.efi.signed /boot/efi/EFI/debian/BOOTX64.EFI
+#     cp mmx64.efi.signed /boot/efi/EFI/debian/mmx64.efi  
+#     efibootmgr --unicode --disk /dev/sda --part 1 --create --label debian-signed --loader /EFI/debian/BOOTx64.efi
+# }
 
-# # Sign kernel with MOK key
-# sbsign --key /usr/lib/mok/$(uname -n).key --cert /usr/lib/mok/$(uname -n).crt --output /boot/vmlinuz-$(uname -r) /boot/vmlinuz-$(uname -r)
-# # Sign kernel modules with MOK key
-# cd /usr/lib/modules/$(uname -r) || exit
-# find . -name *.ko -exec /usr/lib/modules/$(uname -r)/source/scripts/sign-file sha256 /usr/lib/mok/$(uname -n).key /usr/lib/mok/$(uname -n).cer {} \;
-# # Rebuild initramfs
-# update-initramfs -u
+# genPrivKeys () {
+#     # Generate the public and private key pair
+#     openssl req -newkey rsa:4096 -nodes -keyout /usr/lib/mok/"$(uname -n)".key -new -x509 -sha256 -days 3650 -subj "/CN=$(uname -n)-mok" -out /usr/lib/mok/"$(uname -n)".crt
+#     openssl x509 -outform DER -in /usr/lib/mok/"$(uname -n)".crt -out /usr/lib/mok/"$(uname -n)".cer
+# }
+
+# keyMokEnroll () {
+#     # Enrolling public key on target system by adding the public key to the MOK list
+#     # Optional: Check enrolled keys: mokutil --list-enrolled
+#     mokutil --generate-hash=$OLDKEYFILE > $TMPDIR/hashfile
+#     mokutil --import /usr/lib/mok/"$(uname -n)".cer --hash-file $TMPDIR/hashfile
+#     rm -rf $TMPDIR/hashfile
+# }
+
+# signKernelAndModules () {
+#     # Sign kernel with MOK key
+#     sbsign --key /usr/lib/mok/$(uname -n).key --cert /usr/lib/mok/$(uname -n).crt --output /boot/vmlinuz-$(uname -r) /boot/vmlinuz-$(uname -r)
+#     # Sign kernel modules with MOK key
+#     cd /usr/lib/modules/$(uname -r) || exit
+#     find . -name *.ko -exec /usr/lib/modules/$(uname -r)/source/scripts/sign-file sha256 /usr/lib/mok/$(uname -n).key /usr/lib/mok/$(uname -n).cer {} \;
+#     # Rebuild initramfs
+#     update-initramfs -u
+# }
+
 
 # # SBAT
 # #echo "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\ngrub,3,Free Software Foundation,grub,2.06,https://www.gnu.org/software/grub/\ngrub.ubuntu,1,Ubuntu,grub2,2.06-2ubuntu14.1,https://www.ubuntu.com/" > /usr/share/grub/sbat.csv
@@ -262,23 +273,6 @@ keyMokEnroll () {
 # sbsign --key /usr/lib/mok/$(uname -n).key --cert /usr/lib/mok/$(uname -n).crt --output /boot/efi/EFI/debian/grubx64.efi /boot/efi/EFI/debian/grubx64.efi
 
 
-
-# signFunc () {
-#     # Signing a kernel with the private key
-#     # Optional: Check the signatures: pesign --show-signature --in /root/vmlinuz-"$(uname -r)".signed
-#     pesign -c 'Custom Secure Boot key' --in /boot/vmlinuz-"$(uname -r)" --out /root/vmlinuz-"$(uname -r)".signed --sign
-#     mv /root/vmlinuz-"$(uname -r)".signed /boot/vmlinuz-"$(uname -r)"
-
-#     # Signing a GRUB build with the private key
-#     # Optional: Check the signatures: pesign --in /root/grubx64.efi.signed --show-signature
-#     pesign -c 'Custom Secure Boot key' --in /boot/efi/EFI/debian/grubx64.efi --out /root/grubx64.efi.signed  --sign
-#     mv /root/grubx64.efi.signed /boot/efi/EFI/debian/grubx64.efi
-
-#     # Signing kernel modules with the private key
-#     echo ""
-
-# }
-
 executeFunc () {
     preReq
     pkgsInstall
@@ -288,7 +282,7 @@ executeFunc () {
     #shimFunc
     #genPrivKeys
     #keyMokEnroll
-    #signFunc
+    #signKernelAndModules
 }
 
 # Check if script is run as root
