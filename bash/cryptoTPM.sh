@@ -56,7 +56,7 @@ preReq () {
 pkgsInstall () {
     # install packages
     # https://askubuntu.com/questions/258219/how-do-i-make-apt-get-install-less-noisy
-    apt-get install -qq -o=Dpkg::Use-Pty=0 "${PKGS[@]}"
+    apt-get install -qq "${PKGS[@]}"
     mkdir -p $TMPDIR
     #mkdir -p $MOKDIR
 }
@@ -67,9 +67,9 @@ keyGen () {
         array=()
         for i in {a..z} {A..Z} {0..9}; 
             do
-            array[$RANDOM]=$i
+            array["$RANDOM"]=$i
         done
-        printf %s ${array[@]::20} | install -m 0600 /dev/stdin $TMPDIR/new_keyfile.key
+        printf %s "${array[@]::20}" | install -m 0600 /dev/stdin $TMPDIR/new_keyfile.key
         printf %s "$OLDKEYFILE" | install -m 0600 /dev/stdin $TMPDIR/old_keyfile.key
         #dd bs=512 count=4 if=/dev/random iflag=fullblock | install -m 0600 /dev/stdin $TMPDIR/new_keyfile.key
         echo "###################"
@@ -206,10 +206,10 @@ keyMokEnroll () {
 
 signKernelAndModules () {
     # Sign kernel with MOK key
-    sbsign --key /usr/lib/mok/$(uname -n).key --cert /usr/lib/mok/$(uname -n).crt --output /boot/vmlinuz-$(uname -r) /boot/vmlinuz-$(uname -r)
+    sbsign --key /usr/lib/mok/"$(uname -n)".key --cert /usr/lib/mok/"$(uname -n)".crt --output /boot/vmlinuz-"$(uname -r)" /boot/vmlinuz-"$(uname -r)"
     # Sign kernel modules with MOK key
-    cd /usr/lib/modules/$(uname -r) || exit
-    find . -name *.ko -exec /usr/lib/modules/$(uname -r)/source/scripts/sign-file sha256 /usr/lib/mok/$(uname -n).key /usr/lib/mok/$(uname -n).cer {} \;
+    cd /usr/lib/modules/"$(uname -r)" || exit
+    find . -name *.ko -exec /usr/lib/modules/"$(uname -r)"/source/scripts/sign-file sha256 /usr/lib/mok/"$(uname -n)".key /usr/lib/mok/"$(uname -n)".cer {} \;
     # Rebuild initramfs
     update-initramfs -u -k all
 }
@@ -295,7 +295,7 @@ grubMkStandalone () {
 }
 
 signNewGrubImage () {
-    sbsign --key /usr/lib/mok/$(uname -n).key --cert /usr/lib/mok/$(uname -n).crt --output /boot/efi/EFI/debian/grubx64.efi /boot/efi/EFI/debian/grubx64.efi
+    sbsign --key /usr/lib/mok/"$(uname -n)".key --cert /usr/lib/mok/"$(uname -n)".crt --output /boot/efi/EFI/debian/grubx64.efi /boot/efi/EFI/debian/grubx64.efi
 }
 
 
