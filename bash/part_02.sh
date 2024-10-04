@@ -1,132 +1,9 @@
 #!/bin/bash
 # Author: Marek Bubeník
 # Date: 27.09.2024
-# About part 1: Rotate keyfiles for LUKS partition, generate and enroll keys for TPM, generate new image and update grub
 # About part 2: Generate private and public keys, enroll public key to MOK list, sign kernel/GRUB/kernel modules
 #
 #
-# Pre-requisites we need for to sign kernel modules
-# =================================================
-# shim-signed                   Secure Boot chain-loading bootloader (Microsoft-signed binary)
-# sbsigntool                    Tools to manipulate signatures on UEFI binaries and drivers
-# build-essential               Contains a list of packages that are required to create a Debian package (deb)
-# dkms                          Program/framework that enables generating Linux kernel modules whose sources generally reside outside the kernel source tree
-# linux-headers-$(uname -r)     Package providing the Linux kernel headers (The headers act as an interface between internal kernel components and also between userspace and the kernel)
-# efivar                        Tools to manage UEFI variables
-
-OLDKEYFILE="VM_123"
-TMPDIR="/tmp/keys"
-#MOKDIR="/usr/lib/mok"
-PKGS=(tss2 tpm2-tools clevis clevis-tpm2 clevis-luks initramfs-tools clevis-initramfs shim-signed sbsigntool build-essential dkms linux-headers-"$(uname -r)" efivar)
-CRYPTOPART=$(blkid -t TYPE=crypto_LUKS | cut -d ":" -f 1)       # determine LUKS partition
-
-##########
-# Part 1 #
-##########
-
-preReq () {
-    # Secure boot check
-    SBENB=$(mokutil --sb)
-    if [[ $SBENB =~ "enabled" ]];then
-        echo "Secure boot       -   [ detected ]"
-    else
-        echo "Secure boot not detected, enable Secure boot in UEFI settings! Exiting..."
-        exit 1
-    fi
-
-    # LUKS partition check
-    LUKSENB=$(blkid -t TYPE=crypto_LUKS)
-    if [[ $LUKSENB ]];then
-        echo "LUKS partition    -   [ detected ]"
-    else
-        echo "LUKS partition not detected, this script works only with LUKS encrypted partitions! Exiting..."
-        exit 1
-    fi
-
-    # TPM 2.0 module check
-    if [[ -c /dev/tpmrm0 ]];then
-        echo "TPM 2.0 module    -   [ detected ]"
-    else
-        echo "TPM 2.0 module not detected, this script works only with TPM 2.0 enabled devices! Exiting..."
-        exit 1
-    fi
-    sleep 4
-}
-
-pkgsInstall () {
-    # install packages
-    # https://askubuntu.com/questions/258219/how-do-i-make-apt-get-install-less-noisy
-    apt-get install -qq "${PKGS[@]}"
-    mkdir -p $TMPDIR
-    #mkdir -p $MOKDIR
-}
-
-keyGen () {
-    # keyfile generator (20 length string)
-    if [[ -d "$TMPDIR" ]];then
-        array=()
-        for i in {a..z} {A..Z} {0..9}; 
-            do
-            array["$RANDOM"]=$i
-        done
-        printf %s "${array[@]::20}" | install -m 0600 /dev/stdin $TMPDIR/new_keyfile.key
-        printf %s "$OLDKEYFILE" | install -m 0600 /dev/stdin $TMPDIR/old_keyfile.key
-        #dd bs=512 count=4 if=/dev/random iflag=fullblock | install -m 0600 /dev/stdin $TMPDIR/new_keyfile.key
-        echo "###################"
-        echo "Keyfiles generated!"
-        echo "###################"
-    else
-        echo "Temporary /tmp/keys directory not found - cannot generate temporary keyfiles! Exiting..."
-        exit 1    
-    fi
-}
-
-keyRotate () {
-    # rotate passphrase with the new keyfile
-    if [[ "$CRYPTOPART" ]];then
-        cryptsetup luksChangeKey "$CRYPTOPART" --key-file $TMPDIR/old_keyfile.key $TMPDIR/new_keyfile.key
-        echo "#################"
-        echo "Keyfiles changed!"
-        echo "#################"
-    else
-        echo "LUKS partition not found - no LUKS keys has been changed! Exiting..."
-        exit 1   
-    fi
-}
-
-keyEnroll () {
-    # clevis pass keys for TPM
-    # deletes tmp keyfiles
-    # https://wiki.archlinux.org/title/Trusted_Platform_Module#Accessing_PCR_registers
-    # https://221b.uk/safe-automatic-decryption-luks-partition-tpm2#background
-    # https://www.reddit.com/r/linuxquestions/comments/106ntat/comment/j3hwfdc/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button
-    # https://pulsesecurity.co.nz/advisories/tpm-luks-bypass
-    if [[ "$CRYPTOPART" ]];then
-        LUKSKEY=$(<$TMPDIR/new_keyfile.key)
-        # The process generate a new independent secret, tying your LUKS partition to the TPM2 as an alternative decryption method.
-        # So if it does not work you may still just enter your decryption passphrase as usual.
-        clevis luks bind -d "$CRYPTOPART" tpm2 '{"pcr_bank":"sha256","pcr_ids":"7"}' <<< "$LUKSKEY"
-        sed -i 's/GRUB_CMDLINE_LINUX=""/GRUB_CMDLINE_LINUX="rd.emergency=reboot rd.shell=0"/g' /etc/default/grub
-        update-initramfs -u -k all
-        update-grub
-        rm -rf /tmp/keys
-        echo "##################################################"
-        echo "Keyfile enrolled for TPM! Removing old keyfiles..."
-        echo "##################################################"
-        # On every update of your system that makes changes to the kernel, grub2 or initramfs you’ll have to rebind the TPM2, if you opted to use PCR 9. 
-        # CRYPTOPART=$(blkid -t TYPE=crypto_LUKS | cut -d ":" -f 1)
-        # clevis luks regen -q -d "$CRYPTOPART" -s 1 tpm2
-    else
-        echo "LUKS partition not found - no LUKS keys has been passed to TPM! Exiting..."
-        exit 1
-    fi
-}
-
-
-##########
-# Part 2 #
-##########
-
 # https://www.youtube.com/watch?v=Yfzn2zPp_f0
 # https://medium.com/@allypetitt/digging-into-the-linux-secure-boot-process-9631a70b158b
 #
@@ -181,6 +58,27 @@ keyEnroll () {
 #   Kernel    -   Signed by MOK key
 #
 #
+# Pre-requisites we need for to sign kernel modules
+# =================================================
+# shim-signed                   Secure Boot chain-loading bootloader (Microsoft-signed binary)
+# sbsigntool                    Tools to manipulate signatures on UEFI binaries and drivers
+# build-essential               Contains a list of packages that are required to create a Debian package (deb)
+# dkms                          Program/framework that enables generating Linux kernel modules whose sources generally reside outside the kernel source tree
+# linux-headers-$(uname -r)     Package providing the Linux kernel headers (The headers act as an interface between internal kernel components and also between userspace and the kernel)
+# efivar                        Tools to manage UEFI variables
+#
+#
+
+OLDKEYFILE="VM_123"
+TMPDIR="/tmp/keys"
+MOKDIR="/usr/lib/mok"
+PKGS=(shim-signed sbsigntool build-essential dkms linux-headers-"$(uname -r)" efivar)
+
+pkgsInstall () {
+    # install packages
+    apt-get install -qq "${PKGS[@]}"
+    mkdir -p $MOKDIR
+}
 
 shimFunc () {
     # shim bootloader, creates entry
@@ -217,10 +115,6 @@ signKernelAndModules () {
 # TODO: incorporate into /etc/kernel/postinst.d/initramfs-tools ????
 
 
-# --------------
-# IGNORE SECTION
-# --------------
-
 # Restrictions
 # ============
 # - GRUB
@@ -240,8 +134,14 @@ genSbat () {
     echo "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\ngrub,1,Free Software Foundation,grub,2.04,https://www.gnu.org/software/grub/\grub.debian,1,Debian,grub2,2.04-12,https://packages.debian.org/source/sid/grub2" > /usr/share/grub/sbat.csv
 }
 
-# gpg --gen-key
-# gpg --export xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx | sudo tee /usr/lib/mok/$(uname -n).asc > /dev/null
+# STOP HERE #
+genGpgKeys () {
+    echo "error"
+    exit 1
+    # gpg --gen-key
+    # gpg --export xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx | sudo tee /usr/lib/mok/$(uname -n).asc > /dev/null
+}
+# STOP HERE #
 
 signGrubModules () {
     # Sign GRUB modules
@@ -298,29 +198,21 @@ signNewGrubImage () {
     sbsign --key /usr/lib/mok/"$(uname -n)".key --cert /usr/lib/mok/"$(uname -n)".crt --output /boot/efi/EFI/debian/grubx64.efi /boot/efi/EFI/debian/grubx64.efi
 }
 
-
-# --------------
-# IGNORE SECTION
-# --------------
-
+# final
 executeFunc () {
-    preReq
     pkgsInstall
-    #shimFunc
-    #genPrivKeys
-    #keyMokEnroll
-    keyGen
-    keyRotate
-    keyEnroll
-    #signKernelAndModules
-    #
-    #
-    #
-    #
-    #
-    #
-    #
-    #
+    shimFunc
+    genPrivKeys
+    keyMokEnroll
+    signKernelAndModules
+    genSbat
+    genGpgKeys
+    signGrubModules
+    signGrub
+    signKernel
+    grubInitial
+    grubMkStandalone
+    signNewGrubImage
 }
 
 # Check if script is run as root
