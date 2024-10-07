@@ -1,7 +1,7 @@
 #!/bin/bash
 # Author: Marek Bubeník
 # Date: 27.09.2024
-# About part 1: Rotate keyfiles for LUKS partition, generate and enroll keys for TPM, generate new image and update grub
+# About part 1: Rotate keyfiles for LUKS partition, generate and enroll keys for TPM via clevis, generate new initramfs and update grub
 # 
 #
 
@@ -9,6 +9,11 @@ OLDKEYFILE="VM_123"
 TMPDIR="/tmp/keys"
 PKGS=(clevis clevis-tpm2 clevis-luks initramfs-tools clevis-initramfs)  # tss2 tpm2-tools
 CRYPTOPART=$(blkid -t TYPE=crypto_LUKS | cut -d ":" -f 1)   # determine LUKS partition
+
+# Supply optional parameter $1 for keyphrase
+if [ -n "$1" ];then 
+    OLDKEYFILE=$1
+fi
 
 preReq () {
     # Secure boot check
@@ -37,12 +42,14 @@ preReq () {
         exit 1
     fi
     sleep 3
+    clear
 }
 
 pkgsInstall () {
     # install packages
     apt-get install -qq "${PKGS[@]}"
     mkdir -p $TMPDIR
+    clear
 }
 
 keyGen () {
@@ -77,10 +84,10 @@ keyEnroll () {
     if [[ "$CRYPTOPART" ]];then
         LUKSKEY=$(<$TMPDIR/new_keyfile.key)
         clevis luks bind -d "$CRYPTOPART" tpm2 '{"pcr_bank":"sha256","pcr_ids":"7"}' <<< "$LUKSKEY"
-        sed -i 's/GRUB_CMDLINE_LINUX=""/GRUB_CMDLINE_LINUX="rd.emergency=reboot rd.shell=0"/g' /etc/default/grub
+        sed -i 's/GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="rd.emergency=reboot rd.shell=0 \1"/g' /etc/default/grub
         update-initramfs -u -k all
         update-grub
-        #rm -rf /tmp/keys       # uncomment just in case files wont delete from tmp folder after reboot
+        #rm -rf $TMPDIR       # uncomment just in case files wont delete from tmp folder after reboot
     else
         echo "LUKS partition not found - no LUKS keys has been passed to TPM! Exiting..."
         exit 1

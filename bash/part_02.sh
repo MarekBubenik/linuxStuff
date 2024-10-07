@@ -144,7 +144,7 @@ genGpgKeys () {
 # STOP HERE #
 
 signGrubModules () {
-    # Sign GRUB modules
+    # unSign GRUB modules
     cd /usr/lib/grub/x86_64-efi || exit
     sudo find . -name "*.mod" -exec gpg --detach-sign {} \;
     sudo find . -name "*.lst" -exec gpg --detach-sign {} \;
@@ -152,13 +152,13 @@ signGrubModules () {
 }
 
 signGrub () {
-    # Sign GRUB
+    # unSign GRUB
     cd /boot/grub || exit
     sudo find . -type f -exec gpg --detach-sign {} \;
 }
 
 signKernel () {
-    # Sign kernel
+    # unSign kernel
     cd /boot/ || exit
     sudo find . -name "vmlinuz*" -exec gpg --detach-sign {} \;
     sudo find . -name "initrd*" -exec gpg --detach-sign {} \;
